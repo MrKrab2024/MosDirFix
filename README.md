@@ -2,23 +2,17 @@
 
 Source/Drain orientation preprocessor for SPICE std-cell decks. It analyzes each subcircuit, infers MOS source/drain directions (PMOS toward VDD, NMOS toward VSS, flowing toward shared functional nets), and rewrites only the D/S fields of MOS lines. Tail parameters (e.g. w/width/l, etc.) are preserved verbatim.
 
-## Features
-- Robust parsing: case-insensitive `.SUBCKT`/`.ENDS`/`M` lines; ignores comments; only the first 6 MOS tokens are parsed (`Mname D G S B model`), tail params kept as-is.
-- Series grouping via DS nets with degree==2 excluding power and shared nets; endpoints derived from degrees.
-- Parallel merge by unordered end-pairs solely to reduce graph size; device orientation remains per original series chain.
-- Orientation by components and path-confirmation: start from power net (PMOS: VDD, NMOS: VSS) toward shared DS nets seen on both sides.
-- Transmission gate groups (endpoints both shared and present on both sides) are skipped.
-- Detailed JSON report and a concise text log.
+- Default branch: `main`
+- Generated artifacts are not tracked (see `.gitignore`); run commands locally to reproduce outputs.
 
-## Repository Layout
-- `orient_sd.py` — main orientation tool (MIT Licensed)
+## Key Files
+- `orient_sd.py` — main orientation tool (MIT licensed)
 - `randomize_mos_ds.py` — utility to create randomized D/S test netlists
 - `AsAp7.sp` — example input deck
-- `out/` — outputs: oriented netlists, reports, logs
-- `rand/` — example randomized input(s)
+- `README.md`, `LICENSE`, `.gitignore`
 
 ## Requirements
-- Python 3.8+; standard library only (no external deps)
+- Python 3.8+; standard library only (no external dependencies)
 
 ## Usage
 ### 1) Orient a netlist
@@ -30,14 +24,15 @@ python orient_sd.py --sp AsAp7.sp \
   --log out/orient_log.txt
 ```
 Notes:
+- `.SUBCKT` / `.ENDS` / `M` matching is case-insensitive; leading whitespace is allowed.
+- Only the first 6 MOS tokens (`Mname D G S B model`) are parsed; the tail params are preserved as-is.
 - `--cells` can restrict to specific subcircuits (one name per line).
-- Only D/S are rewritten; gate/bulk/model/tail params are preserved.
 
 ### 2) Generate a randomized D/S netlist (for testing)
 ```bash
 python randomize_mos_ds.py --in AsAp7.sp --out out/randomized_ds.sp --prob 0.5 --seed 42
 ```
-- Randomly swaps D/S per MOS with probability `--prob`; tail params untouched.
+- Per MOS, swaps D/S with probability `--prob`; tail params untouched.
 
 ### 3) Re-orient a randomized netlist
 ```bash
@@ -46,20 +41,20 @@ python orient_sd.py --sp out/randomized_ds.sp --out_sp out/oriented_from_rand.sp
 ```
 
 ## Algorithm Highlights
-- Build pure-series chains using DS nets of degree 2; ignore power nets (VDD/VSS) and discovered shared nets as linking points.
-- Shared nets are DS nets common to PMOS and NMOS sides (excluding power).
-- Merge parallel chains whose unordered endpoint set matches; store each original chain (`chains`) and orient chains independently along confirmed net-paths.
-- BFS enumerates net-paths from the start power net to any shared net; each path confirms edge directions; conflicts are logged.
+- Build pure-series chains using DS nets of degree 2; power nets (VDD/VSS) and discovered shared nets are excluded as linking points.
+- Shared nets = DS nets common to PMOS and NMOS sides (excluding power nets).
+- Merge parallel chains when the unordered endpoint set matches; this reduces graph size only. Each original series chain is preserved (`chains`) and oriented independently.
+- Orientation by components: from the start power net (PMOS: VDD, NMOS: VSS) toward shared nets; confirm edge directions along discovered paths; log conflicts.
+- Transmission-gate-like groups whose both ends are shared (and appear on both sides) are skipped.
 
 ## Outputs
-- `--out_sp`: oriented SPICE; only MOS D/S possibly swapped.
-- `--report_json`: per-cell/per-side details: oriented/ambiguous counts, sequences, notes, TG-skipped devices, series groups (pre/post), components.
+- `--out_sp`: oriented SPICE; only MOS D/S may change.
+- `--report_json`: per-cell/per-side details — oriented/ambiguous counts, sequences, notes, TG-skipped devices, series groups (pre/post), components.
 - `--log`: compact summary of processed/skipped cells.
 
-## Limitations
-- Device type detection relies on model name containing `pmos`/`nmos`.
-- TG-like structures are skipped intentionally.
-- If a component has no shared net or no path to it, some devices may remain ambiguous (left unchanged).
+## Repository Policy
+- Artifacts under `out/` and test inputs under `rand/` are generated locally and ignored by Git.
+- The repo keeps only key scripts and sample input; re-run the commands above to regenerate outputs.
 
 ## License
-MIT — see header in `orient_sd.py`.
+MIT — see header in `orient_sd.py` and `LICENSE`.
