@@ -68,6 +68,7 @@ class OrientationResult:
 # -----------------------------
 
 SUBCKT_RE = re.compile(r"^\s*\.SUBCKT\s+(\S+)\s*(.*)$", re.IGNORECASE)
+M_RE_PRESERVE = re.compile(r'^(\s*)([Mm])(\S*)(\s+)(\S+)(\s+)(\S+)(\s+)(\S+)(\s+)(\S+)(\s+)(\S+)(.*)$')
 ENDS_RE   = re.compile(r"^\s*\.ENDS\b", re.IGNORECASE)
 # Matches: M<name> D G S B model [params...]
 M_RE      = re.compile(r"^\s*M(\S*)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)(.*)$", re.IGNORECASE)
@@ -517,6 +518,8 @@ def orient_component(groups: List[Group],
     q = deque()
     q.append([start_net])
     seen_paths = 0
+    max_depth = MAX_PATH_LEN
+    stop_early = STOP_AFTER_FIRST_SHARED
     while q:
         path = q.popleft()
         u = path[-1]
@@ -525,9 +528,13 @@ def orient_component(groups: List[Group],
                 # cycle on current path; skip
                 continue
             new_path = path + [v]
+            if max_depth and (len(new_path)-1) > max_depth:
+                continue
             if v in shared_nets:
                 confirm_path(new_path)
                 sequences.append(new_path)
+                if stop_early:
+                    q.clear(); break
             else:
                 q.append(new_path)
             seen_paths += 1
@@ -564,6 +571,9 @@ def orient_by_components(groups: List[Group],
 
         if start_power_net in comp_nets:
             start = start_power_net
+        elif (POWER_NETS & comp_nets):
+            start = next(iter(POWER_NETS & comp_nets))
+            result.notes.append(f"component {ci} start at alt power {start}")
         elif endpoints:
             start = endpoints[0]
             result.notes.append(f"component {ci} no power net; start at endpoint {start}")
@@ -661,7 +671,7 @@ def dump_groups(groups: List[Group], devs: List[Device]) -> List[dict]:
 def process_cell(cell: Cell, vdd: str, vss: str) -> Dict[str, OrientationResult]:
     p_devs = [d for d in cell.devices if d.typ == "pmos"]
     n_devs = [d for d in cell.devices if d.typ == "nmos"]
-    power = {vdd, vss}
+    power = POWER_NETS if POWER_NETS else {vdd, vss}
 
     shared = find_shared_ds_nets(p_devs, n_devs, exclude=power)
 
@@ -744,7 +754,8 @@ def process_cell(cell: Cell, vdd: str, vss: str) -> Dict[str, OrientationResult]
 def rewrite_spice(lines: List[str],
                   cells: Dict[str, Cell],
                   results: Dict[str, Dict[str, OrientationResult]],
-                  out_path: str) -> None:
+                  out_path: str,
+                  preserve_ws: bool = False) -> None:
     dev_orient: Dict[str, Tuple[str, str]] = {}
     for cname, res_pair in results.items():
         for typ in ("pmos", "nmos"):
@@ -844,6 +855,21 @@ def write_log(results: Dict[str, Dict[str, OrientationResult]], cells: Dict[str,
 # CLI
 # -----------------------------
 
+EXTRA_POWER: Set[str] = set()
+POWER_NETS: Set[str] = set()
+MAX_PATH_LEN: int = 0
+STOP_AFTER_FIRST_SHARED: bool = False
+
+def _parse_list_arg(val: str) -> Set[str]:
+    s: Set[str] = set()
+    if not val:
+        return s
+    for part in val.split(','):
+        p = part.strip()
+        if p:
+            s.add(p)
+    return s
+
 def main():
     ap = argparse.ArgumentParser(
         description="Preprocess SPICE: determine MOS Source/Drain by multi-length series groups and path-first orientation to shared nets."
@@ -851,10 +877,15 @@ def main():
     ap.add_argument("--sp", required=True, help="Input SPICE (e.g., data/AsAp7.sp)")
     ap.add_argument("--vdd", default="VDD", help="VDD net name")
     ap.add_argument("--vss", default="VSS", help="VSS net name")
+    ap.add_argument("--vdd_list", default="", help="Optional comma-separated extra VDD nets")
+    ap.add_argument("--vss_list", default="", help="Optional comma-separated extra VSS nets")
     ap.add_argument("--cells", default="", help="Optional file with cell names to process (one per line); default: all")
     ap.add_argument("--out_sp", default="out/oriented.sp", help="Output oriented SPICE path")
     ap.add_argument("--report_json", default="out/orient_report.json", help="Output JSON report path")
     ap.add_argument("--log", default="out/orient_log.txt", help="Output log path")
+    ap.add_argument("--max_path_len", type=int, default=0, help="Max BFS path length; 0=unlimited")
+    ap.add_argument("--stop_after_first_shared", action="store_true", help="Stop after first path to any shared net")
+    ap.add_argument("--preserve_ws", action="store_true", help="Preserve whitespace of M-lines when possible")
     args = ap.parse_args()
 
     lines, cells = parse_spice(args.sp)
@@ -865,6 +896,15 @@ def main():
     else:
         targets = set(cells.keys())
 
+    # global controls
+    global EXTRA_POWER, POWER_NETS, MAX_PATH_LEN, STOP_AFTER_FIRST_SHARED
+    vdd_set=_parse_list_arg(args.vdd_list)
+    vss_set=_parse_list_arg(args.vss_list)
+    EXTRA_POWER=(vdd_set|vss_set)-{args.vdd,args.vss}
+    POWER_NETS={args.vdd,args.vss}|EXTRA_POWER
+    MAX_PATH_LEN=int(args.max_path_len or 0)
+    STOP_AFTER_FIRST_SHARED=bool(args.stop_after_first_shared)
+
     results: Dict[str, Dict[str, OrientationResult]] = {}
     for cname in sorted(cells.keys()):
         if cname not in targets:
@@ -872,7 +912,7 @@ def main():
         res = process_cell(cells[cname], vdd=args.vdd, vss=args.vss)
         results[cname] = res
 
-    rewrite_spice(lines, cells, results, args.out_sp)
+    rewrite_spice(lines, cells, results, args.out_sp, preserve_ws=args.preserve_ws)
     write_report(results, args.report_json)
     write_log(results, cells, args.log)
 
