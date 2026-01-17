@@ -58,3 +58,6 @@ python orient_sd.py --sp out/randomized_ds.sp --out_sp out/oriented_from_rand.sp
 
 ## License
 MIT — see header in `orient_sd.py` and `LICENSE`.
+
+
+### Advanced options (feature/robustness)\n- --vdd_list / --vss_list: extra power/ground aliases (comma-separated)\n- --max_path_len: limit BFS path length (edges); 0 = unlimited\n- --stop_after_first_shared: early-stop after reaching any shared net\n- --preserve_ws: try preserving whitespace when rewriting MOS lines (no continuations)\n
